@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import signal
 import socket
 import struct
@@ -24,6 +25,9 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
+
+import activity
+from properties import PROPERTIES, read_properties, validate_property, write_property
 
 try:
     import psutil
@@ -49,9 +53,18 @@ PAPER_BUILD = 132
 PAPER_SHA256 = "5ffef465eeeb5f2a3c23a24419d97c51afd7dbb4923ff42df9a3f58bba1ccfba"
 SAFE_MEMORY_RESERVE_MB = 2048
 MAX_UPLOAD_BYTES = 128 * 1024 * 1024
-ALLOWED_PROPERTIES = {
-    "motd", "max-players", "difficulty", "pvp", "view-distance",
-    "simulation-distance", "spawn-protection", "white-list",
+JVM_FORBIDDEN_PREFIXES = ("-Xms", "-Xmx", "-jar", "-cp", "-classpath", "--class-path", "-javaagent", "-agentpath")
+STATIC_FILES = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/styles.css": ("styles.css", "text/css; charset=utf-8"),
+    "/app.js": ("app.js", "application/javascript; charset=utf-8"),
+}
+PLAYER_ACTIONS = {
+    "kick": "kick {name}",
+    "op": "op {name}",
+    "deop": "deop {name}",
+    "whitelist-add": "whitelist add {name}",
+    "whitelist-remove": "whitelist remove {name}",
 }
 
 
@@ -74,6 +87,21 @@ def safe_memory_mb() -> int:
     return max(1024, min(8192, ((available - SAFE_MEMORY_RESERVE_MB) // 1024) * 1024))
 
 
+def parse_jvm_args(text: str) -> list[str]:
+    if "\n" in text or "\r" in text or len(text) > 1000:
+        raise ValueError("JVM arguments must be a single line of at most 1000 characters.")
+    try:
+        tokens = shlex.split(text)
+    except ValueError as exc:
+        raise ValueError("JVM arguments have an unmatched quote.") from exc
+    for token in tokens:
+        if not re.fullmatch(r"-[A-Za-z0-9_.:=,+/-]+", token) or token.startswith(JVM_FORBIDDEN_PREFIXES):
+            raise ValueError(f"JVM argument not allowed: {token}")
+        if re.search(r"-XX:[+-]?Use\w*GC\b", token):
+            raise ValueError("The garbage collector is already chosen by the panel; remove it from the start options.")
+    return tokens
+
+
 def ensure_layout() -> None:
     for path in (SERVER, BACKUPS, LOGS, SERVER / "plugins"):
         path.mkdir(parents=True, exist_ok=True)
@@ -82,6 +110,7 @@ def ensure_layout() -> None:
             "auto_start": True,
             "memory_mb": safe_memory_mb(),
             "restart_delay_seconds": 10,
+            "jvm_args": "",
             "server_name": "DensitySMP",
             "software": "Paper",
             "minecraft_version": PAPER_VERSION,
@@ -199,13 +228,14 @@ class ServerManager:
             raise RuntimeError("Paper jar is incomplete; refusing to start.")
         if hashlib.sha256(PAPER_JAR.read_bytes()).hexdigest() != PAPER_SHA256:
             raise RuntimeError("Paper jar checksum does not match the official Paper build.")
+        extra = parse_jvm_args(str(settings.get("jvm_args", "")))
         self.console.add(f"Starting Paper {PAPER_VERSION} build {PAPER_BUILD} with Java 21; heap {memory} MiB.")
         output = CONSOLE_LOG.open("a", encoding="utf-8", buffering=1)
         try:
             self.process = subprocess.Popen(
                 [str(java), f"-Xms{memory}M", f"-Xmx{memory}M", "-XX:+UseG1GC",
                  "-XX:+ParallelRefProcEnabled", "-XX:MaxGCPauseMillis=200",
-                 "-jar", str(PAPER_JAR), "--nogui"],
+                 *extra, "-jar", str(PAPER_JAR), "--nogui"],
                 cwd=SERVER, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, bufsize=1,
                 start_new_session=True,
@@ -476,10 +506,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path == "/":
-            content = (ROOT / "web" / "index.html").read_bytes()
+        if parsed.path in STATIC_FILES:
+            name, content_type = STATIC_FILES[parsed.path]
+            content = (ROOT / "web" / name).read_bytes()
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(content)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -495,6 +526,17 @@ class Handler(BaseHTTPRequestHandler):
                 "server_dir": str(SERVER),
                 "paper": {"version": PAPER_VERSION, "build": PAPER_BUILD, "verified": True},
             })
+            return
+        if parsed.path == "/api/properties":
+            current = read_properties(SERVER / "server.properties")
+            values = {prop["key"]: current.get(prop["key"], prop["default"]) for prop in PROPERTIES}
+            json_response(self, {"schema": PROPERTIES, "values": values})
+            return
+        if parsed.path == "/api/activity":
+            try:
+                json_response(self, {"entries": activity.recent()})
+            except (RuntimeError, OSError, ValueError) as exc:
+                json_response(self, {"error": str(exc)}, 503)
             return
         if parsed.path == "/api/console":
             after = int(parse_qs(parsed.query).get("after", ["0"])[0])
@@ -566,49 +608,52 @@ class Handler(BaseHTTPRequestHandler):
                 result = f"Created backup {make_backup()}."
             elif path == "/api/settings":
                 settings = load_settings()
-                memory = int(payload.get("memory_mb", settings["memory_mb"]))
-                if memory < 1024 or memory > safe_memory_mb():
-                    raise ValueError(f"Memory must be between 1024 and {safe_memory_mb()} MiB.")
-                settings["memory_mb"] = memory
+                if "memory_mb" in payload:
+                    memory = int(payload["memory_mb"])
+                    if memory < 1024 or memory > safe_memory_mb():
+                        raise ValueError(f"Memory must be between 1024 and {safe_memory_mb()} MiB.")
+                    settings["memory_mb"] = memory
                 if "auto_start" in payload:
                     settings["auto_start"] = bool(payload["auto_start"])
-                for key in ALLOWED_PROPERTIES:
-                    if key in payload:
-                        value = str(payload[key]).strip()
-                        if "\n" in value or "\r" in value:
-                            raise ValueError(f"Invalid value for {key}.")
-                        if key in {"max-players", "view-distance", "simulation-distance", "spawn-protection"}:
-                            if not value.isdigit():
-                                raise ValueError(f"{key} must be a non-negative integer.")
-                        if key in {"pvp", "white-list"} and value.lower() not in {"true", "false"}:
-                            raise ValueError(f"{key} must be true or false.")
-                        if key == "difficulty" and value.lower() not in {"peaceful", "easy", "normal", "hard"}:
-                            raise ValueError("difficulty must be peaceful, easy, normal, or hard.")
-                        set_property(key, value)
+                if "restart_delay_seconds" in payload:
+                    delay = int(payload["restart_delay_seconds"])
+                    if not 5 <= delay <= 300:
+                        raise ValueError("Restart delay must be between 5 and 300 seconds.")
+                    settings["restart_delay_seconds"] = delay
+                if "jvm_args" in payload:
+                    text = str(payload["jvm_args"]).strip()
+                    parse_jvm_args(text)
+                    settings["jvm_args"] = text
                 save_settings(settings)
-                result = "Settings saved. Heap changes apply after the next server restart."
+                result = "Settings saved."
+                if payload.get("restart_now") and MANAGER.status()["running"]:
+                    result = f"Settings saved. {MANAGER.restart()}"
+            elif path == "/api/properties":
+                if not isinstance(payload, dict) or not payload:
+                    raise ValueError("No server settings were provided.")
+                values = {key: validate_property(key, raw) for key, raw in payload.items()}
+                for key, value in values.items():
+                    write_property(SERVER / "server.properties", key, value)
+                result = f"Saved {len(values)} server setting(s). Restart the server to apply them."
+            elif path == "/api/players/action":
+                action = str(payload.get("action", ""))
+                name = str(payload.get("name", ""))
+                if action not in PLAYER_ACTIONS:
+                    raise ValueError("Unknown player action.")
+                if not re.fullmatch(r"[A-Za-z0-9_]{1,16}", name):
+                    raise ValueError("Player names use 1-16 letters, numbers, or underscores.")
+                MANAGER.command(PLAYER_ACTIONS[action].format(name=name))
+                result = f"Sent {action} for {name}."
             elif path == "/api/shutdown":
                 threading.Thread(target=shutdown_panel, daemon=True).start()
                 result = "Panel is shutting down after gracefully stopping the Minecraft server."
             else:
                 json_response(self, {"error": "Not found."}, 404)
                 return
+            activity.record(path.removeprefix("/api/").replace("/", "."), result)
             json_response(self, {"message": result})
         except (ValueError, RuntimeError, OSError, json.JSONDecodeError, binascii.Error) as exc:
             json_response(self, {"error": str(exc)}, 400)
-
-
-def set_property(key: str, value: str) -> None:
-    path = SERVER / "server.properties"
-    lines = path.read_text().splitlines() if path.exists() else []
-    prefix = f"{key}="
-    for index, line in enumerate(lines):
-        if line.startswith(prefix):
-            lines[index] = prefix + value
-            break
-    else:
-        lines.append(prefix + value)
-    path.write_text("\n".join(lines) + "\n")
 
 
 def shutdown_panel() -> None:

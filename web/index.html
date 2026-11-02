@@ -4,76 +4,204 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ServerMaker · DensitySMP</title>
-  <style>
-    :root{color-scheme:dark;--bg:#0b1118;--panel:#121c27;--line:#243443;--muted:#91a4b7;--text:#e9f1f8;--accent:#4ade80;--blue:#60a5fa;--red:#fb7185}
-    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
-    header{display:flex;align-items:center;justify-content:space-between;padding:18px 5vw;border-bottom:1px solid var(--line);background:#0e1721;position:sticky;top:0;z-index:2}
-    h1{font-size:19px;margin:0}h1 span{color:var(--accent)}.subtitle{color:var(--muted);font-size:12px}
-    main{max-width:1260px;margin:24px auto;padding:0 20px}.actions{display:flex;gap:8px;flex-wrap:wrap}
-    button,input,select,textarea{font:inherit;color:var(--text);background:#0c141d;border:1px solid var(--line);border-radius:7px;padding:9px 11px}
-    button{cursor:pointer;background:#172636}button:hover{border-color:var(--blue)}button.primary{background:#166534;border-color:#22c55e}button.danger{background:#42202a;border-color:#9f3c51}
-    .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin:18px 0}.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
-    .metric{font-size:24px;font-weight:650;margin-top:8px}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.07em}
-    .layout{display:grid;grid-template-columns:1.35fr 1fr;gap:14px}.section-title{font-size:16px;font-weight:600;margin:0 0 12px}.status{display:inline-flex;align-items:center;gap:7px}.dot{width:9px;height:9px;border-radius:50%;background:#697887}.dot.on{background:var(--accent);box-shadow:0 0 9px #4ade8066}
-    #console{height:310px;overflow:auto;background:#080d12;color:#c5d1dc;padding:12px;border-radius:7px;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
-    .command{display:flex;gap:8px;margin-top:8px}.command input{flex:1}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.muted{color:var(--muted)}.good{color:var(--accent)}.bad{color:var(--red)}
-    .stack{display:grid;gap:10px}.split{display:flex;justify-content:space-between;gap:8px;align-items:center}.scroll{max-height:210px;overflow:auto}.file,.plugin,.backup{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)}.file button{padding:4px 8px}
-    textarea{width:100%;min-height:180px;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.wide{grid-column:1/-1}.field{display:grid;gap:5px;margin:10px 0}.field label{color:var(--muted);font-size:12px}.notice{font-size:12px;color:var(--muted);margin:10px 0 0}
-    @media(max-width:850px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.layout{grid-template-columns:1fr}}@media(max-width:520px){header{padding:14px 16px}.grid{grid-template-columns:1fr 1fr}main{padding:0 12px}.metric{font-size:19px}}
-  </style>
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-<header><div><h1><span>◈</span> ServerMaker</h1><div class="subtitle">DensitySMP · Paper 1.21.11 build 132</div></div><div class="status"><span id="dot" class="dot"></span><span id="serverState">Connecting…</span></div></header>
-<main>
-  <div class="actions">
-    <button class="primary" onclick="action('start')">Start</button><button onclick="action('restart')">Restart</button><button class="danger" onclick="action('stop')">Stop gracefully</button><span id="notice" class="muted"></span>
-  </div>
-  <section class="grid">
-    <div class="card"><div class="label">Minecraft</div><div id="gameState" class="metric">—</div></div>
-    <div class="card"><div class="label">Players</div><div id="players" class="metric">—</div></div>
-    <div class="card"><div class="label">Server RAM</div><div id="ram" class="metric">—</div></div>
-    <div class="card"><div class="label">Host CPU</div><div id="cpu" class="metric">—</div></div>
-  </section>
-  <section class="layout">
-    <div class="card"><h2 class="section-title">Live console</h2><pre id="console"></pre><form class="command" id="commandForm"><input id="command" placeholder="Enter server command" autocomplete="off"><button>Send</button></form></div>
-    <div class="stack">
-      <div class="card"><h2 class="section-title">Public access</h2><div id="public" class="muted">Checking external connectivity…</div><p class="notice">Only a verified reachable address is shown as a join address. A detected egress IP is not proof of inbound access.</p></div>
-      <div class="card"><h2 class="section-title">Players online</h2><div id="playerList" class="muted">Loading…</div></div>
-      <div class="card"><h2 class="section-title">World backups</h2><div class="row"><button onclick="backup()">Save world backup</button><button onclick="loadBackups()">Refresh</button></div><div id="backups" class="scroll"></div></div>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">◈</div>
+    <div>
+      <h1>ServerMaker</h1>
+      <p class="subtle">DensitySMP · Paper 1.21.11 build 132</p>
     </div>
-    <div class="card"><div class="split"><h2 class="section-title">File manager</h2><button onclick="loadFiles(currentPath)">Refresh</button></div><div id="path" class="muted"></div><div id="files" class="scroll"></div><textarea id="editor" hidden></textarea><div id="fileActions" class="row" hidden><button class="primary" onclick="saveFile()">Save file</button><button onclick="closeEditor()">Close</button></div></div>
-    <div class="card"><div class="split"><h2 class="section-title">Plugins</h2><button onclick="loadPlugins()">Refresh</button></div><label class="row"><input id="pluginFile" type="file" accept=".jar"><button onclick="uploadPlugin()">Upload JAR</button></label><div id="plugins" class="scroll"></div><p class="notice">Only upload plugins from sources you trust. Restart to load newly uploaded plugins.</p></div>
-    <div class="card wide"><h2 class="section-title">Server settings</h2><div class="row">
-      <div class="field"><label>Heap size (MiB)</label><input id="memory" type="number" min="1024" step="1024"></div>
-      <div class="field"><label>Maximum safe heap (MiB)</label><input id="safeMemory" readonly></div>
-      <div class="field"><label>Maximum players</label><input id="maxPlayers" type="number" min="1" max="1000"></div>
-      <div class="field"><label>Difficulty</label><select id="difficulty"><option>peaceful</option><option>easy</option><option>normal</option><option>hard</option></select></div>
-      <div class="field"><label>View distance</label><input id="viewDistance" type="number" min="2" max="32"></div>
-      <div class="field"><label>MOTD</label><input id="motd"></div>
-    </div><label class="row"><input id="autoStart" type="checkbox"> Automatically start and restart the server</label><p><button class="primary" onclick="saveSettings()">Save settings</button></p><p class="notice">Settings are stored in server.properties. World data is never removed during restarts.</p></div>
+  </div>
+  <div class="topbar-right">
+    <span id="joinChip" class="chip" hidden></span>
+    <span id="livePill" class="pill"><span class="dot"></span><span id="livePillText">Connecting</span></span>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="Panel sections">
+  <button class="tab active" role="tab" data-tab="overview">Overview</button>
+  <button class="tab" role="tab" data-tab="settings">Settings</button>
+  <button class="tab" role="tab" data-tab="console">Console</button>
+  <button class="tab" role="tab" data-tab="files">Files</button>
+  <button class="tab" role="tab" data-tab="plugins">Plugins</button>
+  <button class="tab" role="tab" data-tab="backups">Backups</button>
+  <button class="tab" role="tab" data-tab="activity">Activity</button>
+</nav>
+
+<main>
+  <section class="view active" id="view-overview">
+    <div class="stats">
+      <article class="stat"><span class="label">Minecraft</span><strong id="gameState">--</strong></article>
+      <article class="stat"><span class="label">Players</span><strong id="players">--</strong></article>
+      <article class="stat"><span class="label">Server memory</span><strong id="ram">--</strong></article>
+      <article class="stat"><span class="label">Host CPU</span><strong id="cpu">--</strong></article>
+    </div>
+
+    <div class="grid two">
+      <article class="card">
+        <h2>Power</h2>
+        <p class="subtle" id="powerText">Checking server state...</p>
+        <div class="button-row">
+          <button class="btn primary" data-power="start">Start</button>
+          <button class="btn" data-power="restart">Restart</button>
+          <button class="btn danger" data-power="stop">Stop gracefully</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>Public address</h2>
+        <div id="publicInfo" class="subtle">Checking external connectivity...</div>
+        <p class="note">A join address is shown only when an outside connection test reaches it.</p>
+      </article>
+
+      <article class="card">
+        <h2>Keep online</h2>
+        <p class="subtle">The Minecraft server starts when this panel starts and restarts after crashes.</p>
+        <label class="switch-row">
+          <span>Keep the server running</span>
+          <input id="autoStart" type="checkbox" class="switch">
+        </label>
+        <div class="field-inline">
+          <label for="restartDelay">Restart delay (seconds)</label>
+          <input id="restartDelay" type="number" min="5" max="300" step="1">
+        </div>
+        <button class="btn" data-save="keepOnline">Save</button>
+      </article>
+
+      <article class="card">
+        <h2>Players online</h2>
+        <div id="playerList" class="subtle">Loading...</div>
+        <form id="playerForm" class="inline-form">
+          <input id="playerName" placeholder="Player name" maxlength="16" autocomplete="off" aria-label="Player name">
+          <select id="playerAction" aria-label="Player action">
+            <option value="kick">Kick</option>
+            <option value="op">Make operator</option>
+            <option value="deop">Remove operator</option>
+            <option value="whitelist-add">Add to whitelist</option>
+            <option value="whitelist-remove">Remove from whitelist</option>
+          </select>
+          <button class="btn">Run</button>
+        </form>
+      </article>
+    </div>
+  </section>
+
+  <section class="view" id="view-settings">
+    <div class="grid two">
+      <article class="card">
+        <h2>Memory (RAM)</h2>
+        <p class="subtle">Changes apply the next time the server starts.</p>
+        <div class="memory-readout"><strong id="memoryValue">--</strong><span class="subtle" id="memoryMax"></span></div>
+        <input id="memory" type="range" min="1024" step="1024" class="range" aria-label="Server memory">
+        <div class="button-row">
+          <button class="btn" data-save="memory">Save memory</button>
+          <button class="btn primary" data-save="memoryRestart">Save and restart now</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>Java start options</h2>
+        <p class="subtle">Extra options passed to Java when the server starts. Memory is set by the slider.</p>
+        <div class="chip-row" id="presetRow"></div>
+        <textarea id="jvmArgs" rows="4" spellcheck="false" aria-label="Java start options"></textarea>
+        <div class="button-row">
+          <button class="btn primary" data-save="jvm">Save start options</button>
+          <button class="btn" data-save="jvmRestart">Save and restart now</button>
+        </div>
+      </article>
+    </div>
+
+    <article class="card">
+      <div class="split">
+        <h2>Server properties</h2>
+        <button class="btn primary" id="saveProperties" disabled>Save changes</button>
+      </div>
+      <p class="subtle">Changed settings take effect after the server restarts. Only changed values are saved.</p>
+      <div id="propertyGroups" class="property-groups"></div>
+    </article>
+  </section>
+
+  <section class="view" id="view-console">
+    <article class="card">
+      <div class="split">
+        <h2>Live console</h2>
+        <button class="btn ghost" id="clearConsole">Clear view</button>
+      </div>
+      <pre id="console" class="console" aria-live="polite"></pre>
+      <div class="chip-row" id="quickCommands"></div>
+      <form class="inline-form" id="commandForm">
+        <input id="command" placeholder="Type a server command, for example: say Hello" autocomplete="off" aria-label="Server command">
+        <button class="btn primary">Send</button>
+      </form>
+    </article>
+  </section>
+
+  <section class="view" id="view-files">
+    <div class="grid two">
+      <article class="card">
+        <div class="split">
+          <h2>Server files</h2>
+          <button class="btn ghost" id="refreshFiles">Refresh</button>
+        </div>
+        <div id="filePath" class="path subtle"></div>
+        <div id="files" class="list scroll"></div>
+      </article>
+      <article class="card" id="editorCard" hidden>
+        <div class="split">
+          <h2 id="editorTitle">Edit file</h2>
+          <button class="btn ghost" id="closeEditor">Close</button>
+        </div>
+        <textarea id="editor" class="editor" spellcheck="false" aria-label="File content"></textarea>
+        <div class="button-row">
+          <button class="btn primary" id="saveFile">Save file</button>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="view" id="view-plugins">
+    <article class="card">
+      <div class="split">
+        <h2>Plugins</h2>
+        <button class="btn ghost" id="refreshPlugins">Refresh</button>
+      </div>
+      <form class="inline-form" id="pluginForm">
+        <input id="pluginFile" type="file" accept=".jar" aria-label="Plugin JAR file">
+        <button class="btn primary">Upload JAR</button>
+      </form>
+      <p class="note">Only install plugins from sources you trust. Restart the server to load new plugins.</p>
+      <div id="plugins" class="list"></div>
+    </article>
+  </section>
+
+  <section class="view" id="view-backups">
+    <article class="card">
+      <div class="split">
+        <h2>World backups</h2>
+        <div class="button-row">
+          <button class="btn ghost" id="refreshBackups">Refresh</button>
+          <button class="btn primary" id="makeBackup">Create backup</button>
+        </div>
+      </div>
+      <div id="backups" class="list"></div>
+    </article>
+  </section>
+
+  <section class="view" id="view-activity">
+    <article class="card">
+      <div class="split">
+        <h2>Recent activity</h2>
+        <button class="btn ghost" id="refreshActivity">Refresh</button>
+      </div>
+      <div id="activity" class="list scroll"></div>
+    </article>
   </section>
 </main>
-<script>
-let currentPath='', editingPath='', lastConsoleId=0;
-const $=id=>document.getElementById(id);
-function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function api(path,options={}){const r=await fetch(path,{...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});const data=await r.json();if(!r.ok)throw Error(data.error||r.statusText);return data}
-function say(text,error=false){$('notice').textContent=text;$('notice').className=error?'bad':'good';setTimeout(()=>$('notice').textContent='',7000)}
-async function action(which){try{say((await api('/api/server/'+which,{method:'POST',body:'{}'})).message);await refresh()}catch(e){say(e.message,true)}}
-async function refresh(){try{const d=await api('/api/status'),s=d.server,g=d.game,p=d.public; $('dot').className='dot '+(s.running?'on':'');$('serverState').textContent=s.running?'Server process running':'Server stopped';$('gameState').textContent=g.online?'Online':'Offline';$('players').textContent=g.online_players+'/'+g.max_players;$('ram').textContent=s.ram_mb.toLocaleString()+' MiB';$('cpu').textContent=s.cpu_percent.toFixed(1)+'%';$('playerList').textContent=g.players.length?g.players.join(', '):(g.online?'No players online':'Server is offline');$('public').innerHTML=p.address?'<strong class="good">Join address: '+esc(p.address)+'</strong>':'<span class="bad">No publicly reachable Minecraft address verified.</span><br>Detected public egress IP: '+esc(p.ip||'unavailable')+'<br>TCP '+d.settings.server_port+': '+esc(p.error||'not reachable');$('memory').value=d.settings.memory_mb;$('safeMemory').value=s.safe_heap_mb;$('autoStart').checked=d.settings.auto_start;loadConsole();}catch(e){say(e.message,true)}}
-async function loadConsole(){try{const d=await api('/api/console?after='+lastConsoleId),box=$('console');for(const line of d.lines){const div=document.createElement('div');div.textContent=line.text;box.append(div);lastConsoleId=line.id}box.scrollTop=box.scrollHeight}catch(e){}}
-$('commandForm').addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/server/command',{method:'POST',body:JSON.stringify({command:$('command').value})});$('command').value='';await loadConsole()}catch(err){say(err.message,true)}});
-async function loadFiles(path){currentPath=path;try{const d=await api('/api/files?path='+encodeURIComponent(path));$('path').textContent='/'+(path||'');$('files').replaceChildren();if(path){const b=document.createElement('button');b.textContent='..';b.onclick=()=>loadFiles(path.split('/').slice(0,-1).join('/'));$('files').append(b)}for(const f of d.files){const row=document.createElement('div');row.className='file';const name=document.createElement('span');name.textContent=(f.directory?'📁 ':'')+f.name+(f.size===null?'':' · '+(f.size/1024).toFixed(1)+' KB');row.append(name);if(f.directory){const b=document.createElement('button');b.textContent='Open';b.onclick=()=>loadFiles(path?path+'/'+f.name:f.name);row.append(b)}else if(f.editable){const b=document.createElement('button');b.textContent='Edit';b.onclick=()=>openFile(path?path+'/'+f.name:f.name);row.append(b)}$('files').append(row)}}catch(e){say(e.message,true)}}
-async function openFile(path){try{const d=await api('/api/file?path='+encodeURIComponent(path));editingPath=path;$('editor').value=d.content;$('editor').hidden=false;$('fileActions').hidden=false}catch(e){say(e.message,true)}}
-async function saveFile(){try{say((await api('/api/file',{method:'POST',body:JSON.stringify({path:editingPath,content:$('editor').value})})).message)}catch(e){say(e.message,true)}}
-function closeEditor(){$('editor').hidden=true;$('fileActions').hidden=true}
-async function loadPlugins(){try{const d=await api('/api/plugins');$('plugins').innerHTML=d.plugins.length?d.plugins.map(p=>'<div class="plugin"><span>'+esc(p.name)+'</span><span class="muted">'+(p.size/1024).toFixed(1)+' KB</span></div>').join():'<span class="muted">No plugins installed.</span>'}catch(e){say(e.message,true)}}
-async function uploadPlugin(){const file=$('pluginFile').files[0];if(!file)return say('Choose a plugin JAR first.',true);try{const content=await new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(String(r.result).split(',')[1]);r.onerror=no;r.readAsDataURL(file)});say((await api('/api/plugins/upload',{method:'POST',body:JSON.stringify({name:file.name,content})})).message);loadPlugins()}catch(e){say(e.message,true)}}
-async function loadBackups(){try{const d=await api('/api/backups');$('backups').innerHTML=d.backups.length?d.backups.map(b=>'<div class="backup"><span>'+esc(b.name)+'</span><span class="muted">'+(b.size/1048576).toFixed(1)+' MB</span></div>').join():'<span class="muted">No backups yet.</span>'}catch(e){say(e.message,true)}}
-async function backup(){try{say((await api('/api/backups',{method:'POST',body:'{}'})).message);loadBackups()}catch(e){say(e.message,true)}}
-async function saveSettings(){try{const d=await api('/api/settings',{method:'POST',body:JSON.stringify({memory_mb:Number($('memory').value),auto_start:$('autoStart').checked,'max-players':$('maxPlayers').value,difficulty:$('difficulty').value,'view-distance':$('viewDistance').value,motd:$('motd').value})});say(d.message);loadProperties()}catch(e){say(e.message,true)}}
-async function loadProperties(){try{const d=await api('/api/file?path=server.properties'),props=Object.fromEntries(d.content.split(/\r?\n/).filter(x=>x&&!x.startsWith('#')).map(x=>{const i=x.indexOf('=');return i<0?['','']:[x.slice(0,i),x.slice(i+1)]}));$('maxPlayers').value=props['max-players']||20;$('difficulty').value=props.difficulty||'normal';$('viewDistance').value=props['view-distance']||8;$('motd').value=props.motd||'DensitySMP'}catch(e){}}
-loadFiles('');loadPlugins();loadBackups();loadProperties();refresh();setInterval(refresh,5000);
-</script>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="/app.js"></script>
 </body>
 </html>
