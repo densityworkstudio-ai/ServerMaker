@@ -1,0 +1,17 @@
+[Unit]
+Description=ServerMaker DensitySMP Minecraft panel and server supervisor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/workspaces/ServerMaker
+ExecStart=/workspaces/ServerMaker/start.sh
+ExecStop=/workspaces/ServerMaker/stop.sh
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target
