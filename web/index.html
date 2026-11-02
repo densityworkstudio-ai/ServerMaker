@@ -140,24 +140,55 @@
   </section>
 
   <section class="view" id="view-files">
+    <article class="card storage-card">
+      <div class="split">
+        <h2>Storage</h2>
+        <button class="btn ghost" id="refreshStorage">Refresh</button>
+      </div>
+      <div class="stats compact">
+        <article class="stat"><span class="label">Server files</span><strong id="storageServer">--</strong></article>
+        <article class="stat"><span class="label">Version history</span><strong id="storageVersions">--</strong></article>
+        <article class="stat"><span class="label">Backups</span><strong id="storageBackups">--</strong></article>
+        <article class="stat"><span class="label">Free disk</span><strong id="storageFree">--</strong></article>
+      </div>
+      <p class="subtle small">Every save, upload, delete, and restore keeps the previous version. The last 20 versions of each file are kept.</p>
+    </article>
     <div class="grid two">
       <article class="card">
         <div class="split">
           <h2>Server files</h2>
-          <button class="btn ghost" id="refreshFiles">Refresh</button>
+          <div class="button-row">
+            <button class="btn ghost" id="refreshFiles">Refresh</button>
+            <button class="btn ghost" id="newFolder">New folder</button>
+            <button class="btn ghost" id="newFile">New text file</button>
+            <label class="btn primary file-button">Upload<input type="file" id="uploadInput" hidden></label>
+          </div>
         </div>
         <div id="filePath" class="path subtle"></div>
         <div id="files" class="list scroll"></div>
       </article>
-      <article class="card" id="editorCard" hidden>
+      <article class="card" id="detailCard" hidden>
         <div class="split">
-          <h2 id="editorTitle">Edit file</h2>
-          <button class="btn ghost" id="closeEditor">Close</button>
+          <div>
+            <h2 id="detailTitle">File</h2>
+            <p id="detailPath" class="path subtle"></p>
+          </div>
+          <button class="btn ghost" id="closeDetail">Close</button>
         </div>
-        <textarea id="editor" class="editor" spellcheck="false" aria-label="File content"></textarea>
         <div class="button-row">
-          <button class="btn primary" id="saveFile">Save file</button>
+          <button class="btn ghost" id="editFile">Edit text</button>
+          <button class="btn ghost" id="downloadFile">Download</button>
+          <button class="btn danger" id="deleteFile">Delete</button>
         </div>
+        <div id="editorArea" hidden>
+          <textarea id="editor" class="editor" spellcheck="false" aria-label="File content"></textarea>
+          <div class="button-row">
+            <button class="btn primary" id="saveFile">Save file</button>
+            <button class="btn ghost" id="cancelEdit">Cancel</button>
+          </div>
+        </div>
+        <h3>Version history</h3>
+        <div id="versions" class="list scroll"></div>
       </article>
     </div>
   </section>
@@ -202,6 +233,7 @@
 </main>
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="/files.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

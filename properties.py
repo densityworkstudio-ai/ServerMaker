@@ -103,8 +103,8 @@ def read_properties(path: Path) -> dict[str, str]:
     return values
 
 
-def write_property(path: Path, key: str, value: str) -> None:
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+def set_property_text(text: str, key: str, value: str) -> str:
+    lines = text.splitlines()
     prefix = f"{key}="
     for index, line in enumerate(lines):
         if line.startswith(prefix):
@@ -112,4 +112,4 @@ def write_property(path: Path, key: str, value: str) -> None:
             break
     else:
         lines.append(prefix + value)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return "\n".join(lines) + "\n"

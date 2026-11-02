@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import socket
 import struct
@@ -27,7 +28,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
 import activity
-from properties import PROPERTIES, read_properties, validate_property, write_property
+import vault
+from properties import PROPERTIES, read_properties, set_property_text, validate_property
 
 try:
     import psutil
@@ -39,6 +41,10 @@ ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 SERVER = DATA / "servers" / "DensitySMP"
 BACKUPS = DATA / "backups"
+VERSIONS = DATA / "versions"
+TEXT_LIMIT_BYTES = 2_000_000
+BINARY_SUFFIXES = {".jar", ".dat", ".mca", ".gz", ".zip", ".png", ".jpg", ".jpeg", ".ico"}
+WORLD_FOLDERS = ("world", "world_nether", "world_the_end")
 LOGS = DATA / "logs"
 SETTINGS_FILE = DATA / "settings.json"
 PID_FILE = DATA / "panel.pid"
@@ -58,6 +64,7 @@ STATIC_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/styles.css": ("styles.css", "text/css; charset=utf-8"),
     "/app.js": ("app.js", "application/javascript; charset=utf-8"),
+    "/files.js": ("files.js", "application/javascript; charset=utf-8"),
 }
 PLAYER_ACTIONS = {
     "kick": "kick {name}",
@@ -172,9 +179,7 @@ def load_settings() -> dict:
 
 
 def save_settings(settings: dict) -> None:
-    temporary = SETTINGS_FILE.with_suffix(".tmp")
-    temporary.write_text(json.dumps(settings, indent=2) + "\n")
-    temporary.replace(SETTINGS_FILE)
+    vault.write_atomic(SETTINGS_FILE, (json.dumps(settings, indent=2) + "\n").encode("utf-8"))
 
 
 class Console:
@@ -455,6 +460,15 @@ def resolve_server_path(relative: str) -> Path:
     return candidate
 
 
+def server_relative(target: Path) -> str:
+    return target.relative_to(SERVER.resolve()).as_posix()
+
+
+def guard_world_write(relative: str) -> None:
+    if relative.split("/", 1)[0] in WORLD_FOLDERS and MANAGER and MANAGER.status()["running"]:
+        raise ValueError("Stop the server before changing world data.")
+
+
 def list_files(relative: str) -> list[dict]:
     path = resolve_server_path(relative)
     if not path.is_dir():
@@ -467,8 +481,8 @@ def list_files(relative: str) -> list[dict]:
             "name": child.name,
             "directory": child.is_dir(),
             "size": child.stat().st_size if child.is_file() else None,
-            "editable": child.is_file() and child.stat().st_size <= 2_000_000
-            and child.suffix.lower() not in {".jar", ".dat", ".mca", ".gz", ".zip"},
+            "editable": child.is_file() and child.stat().st_size <= TEXT_LIMIT_BYTES
+            and child.suffix.lower() not in BINARY_SUFFIXES,
         })
     return result
 
@@ -555,9 +569,38 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/file":
             relative = parse_qs(parsed.query).get("path", [""])[0]
             path = resolve_server_path(relative)
-            if not path.is_file() or path.stat().st_size > 2_000_000:
+            if not path.is_file() or path.stat().st_size > TEXT_LIMIT_BYTES:
                 raise ValueError("File is missing or too large to edit.")
             json_response(self, {"path": relative, "content": path.read_text(encoding="utf-8")})
+            return
+        if parsed.path == "/api/files/download":
+            relative = parse_qs(parsed.query).get("path", [""])[0]
+            path = resolve_server_path(relative)
+            if not path.is_file():
+                raise ValueError("File not found.")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(path.stat().st_size))
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(path.name)}")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            with path.open("rb") as handle:
+                shutil.copyfileobj(handle, self.wfile)
+            return
+        if parsed.path == "/api/versions":
+            relative = parse_qs(parsed.query).get("path", [""])[0]
+            if not relative:
+                raise ValueError("Choose a file first.")
+            key = server_relative(resolve_server_path(relative))
+            json_response(self, {"path": key, "versions": vault.list_versions(key, VERSIONS)})
+            return
+        if parsed.path == "/api/storage":
+            json_response(self, {
+                "server_bytes": vault.tree_size(SERVER),
+                "versions_bytes": vault.tree_size(VERSIONS),
+                "backup_bytes": vault.tree_size(BACKUPS),
+                "free_bytes": shutil.disk_usage(DATA).free,
+            })
             return
         if parsed.path == "/api/plugins":
             plugins = []
@@ -592,12 +635,48 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/file":
                 relative = str(payload.get("path", ""))
                 target = resolve_server_path(relative)
-                if not target.is_file() or target.stat().st_size > 2_000_000:
-                    raise ValueError("Only existing text files up to 2 MB can be edited.")
-                if target.suffix.lower() in {".jar", ".dat", ".mca", ".gz", ".zip"}:
-                    raise ValueError("Binary files cannot be edited.")
-                target.write_text(str(payload.get("content", "")), encoding="utf-8")
-                result = "File saved."
+                content = str(payload.get("content", "")).encode("utf-8")
+                if len(content) > TEXT_LIMIT_BYTES:
+                    raise ValueError("Text files are limited to 2 MB; upload larger files instead.")
+                if target.suffix.lower() in BINARY_SUFFIXES:
+                    raise ValueError("Binary files cannot be edited as text; upload a replacement instead.")
+                if target.is_dir() or not target.parent.is_dir():
+                    raise ValueError("Choose a file inside an existing folder.")
+                guard_world_write(server_relative(target))
+                vault.save(target, server_relative(target), content, VERSIONS)
+                result = f"Saved {server_relative(target)}. The previous version is in history."
+            elif path == "/api/files/upload":
+                target = resolve_server_path(str(payload.get("path", "")))
+                encoded = str(payload.get("content", ""))
+                if len(encoded) > MAX_UPLOAD_BYTES * 4 // 3:
+                    raise ValueError("File is larger than 128 MB.")
+                content = base64.b64decode(encoded, validate=True)
+                if target == SERVER.resolve() or target.is_dir():
+                    raise ValueError("A folder already has that name.")
+                guard_world_write(server_relative(target))
+                target.parent.mkdir(parents=True, exist_ok=True)
+                vault.save(target, server_relative(target), content, VERSIONS)
+                result = f"Uploaded {server_relative(target)}. Any replaced version is in history."
+            elif path == "/api/folders":
+                target = resolve_server_path(str(payload.get("path", "")))
+                if target.exists():
+                    raise ValueError("That name already exists.")
+                target.mkdir(parents=True)
+                result = f"Created folder {server_relative(target)}."
+            elif path == "/api/files/delete":
+                target = resolve_server_path(str(payload.get("path", "")))
+                if not target.is_file():
+                    raise ValueError("Only files can be deleted here.")
+                guard_world_write(server_relative(target))
+                vault.delete(target, server_relative(target), VERSIONS)
+                result = f"Deleted {server_relative(target)}. A copy is kept in history."
+            elif path == "/api/versions/restore":
+                target = resolve_server_path(str(payload.get("path", "")))
+                if target == SERVER.resolve() or not target.parent.is_dir():
+                    raise ValueError("Choose a file inside an existing folder.")
+                guard_world_write(server_relative(target))
+                vault.restore(target, server_relative(target), str(payload.get("version", "")), VERSIONS)
+                result = f"Restored {server_relative(target)}. The replaced version is in history."
             elif path == "/api/plugins/upload":
                 name = str(payload.get("name", ""))
                 if not re.fullmatch(r"[A-Za-z0-9_. -]{1,120}\.jar", name, re.IGNORECASE):
@@ -608,7 +687,7 @@ class Handler(BaseHTTPRequestHandler):
                 content = base64.b64decode(encoded, validate=True)
                 if not content.startswith(b"PK\x03\x04") or len(content) > MAX_UPLOAD_BYTES:
                     raise ValueError("The selected file is not a valid-size JAR/ZIP archive.")
-                (SERVER / "plugins" / name).write_bytes(content)
+                vault.save(SERVER / "plugins" / name, f"plugins/{name}", content, VERSIONS)
                 result = "Plugin uploaded; restart the server to load it."
             elif path == "/api/backups":
                 result = f"Created backup {make_backup()}."
@@ -638,8 +717,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(payload, dict) or not payload:
                     raise ValueError("No server settings were provided.")
                 values = {key: validate_property(key, raw) for key, raw in payload.items()}
+                target = SERVER / "server.properties"
+                content = target.read_text(encoding="utf-8") if target.exists() else ""
                 for key, value in values.items():
-                    write_property(SERVER / "server.properties", key, value)
+                    content = set_property_text(content, key, value)
+                vault.save(target, "server.properties", content.encode("utf-8"), VERSIONS)
                 result = f"Saved {len(values)} server setting(s). Restart the server to apply them."
             elif path == "/api/players/action":
                 action = str(payload.get("action", ""))
