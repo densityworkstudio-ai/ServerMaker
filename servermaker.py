@@ -220,7 +220,7 @@ class ServerManager:
     def _spawn(self) -> None:
         settings = load_settings()
         memory = max(1024, int(settings["memory_mb"]))
-        java_home = os.environ.get("JAVA_HOME", "/usr/local/sdkman/candidates/java/21.0.13.0+2-ms")
+        java_home = os.environ.get("JAVA_HOME", "")
         java = Path(java_home) / "bin" / "java"
         if not java.is_file():
             raise RuntimeError(f"Java executable not found: {java}")
