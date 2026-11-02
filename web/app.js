@@ -317,6 +317,7 @@ async function loadActivity() {
 
 function propertyInput(prop, value) {
   const input = document.createElement(prop.kind === "enum" ? "select" : "input");
+  input.id = `prop-${prop.key}`;
   input.dataset.key = prop.key;
   input.setAttribute("aria-label", prop.label);
   if (prop.kind === "bool") {
@@ -379,6 +380,7 @@ async function loadProperties() {
         const wrapper = document.createElement("div");
         wrapper.className = "property";
         const label = document.createElement("label");
+        label.htmlFor = `prop-${prop.key}`;
         label.textContent = prop.label;
         if (prop.note) {
           const note = document.createElement("small");

@@ -474,7 +474,7 @@ def list_files(relative: str) -> list[dict]:
 
 
 def make_backup() -> str:
-    if MANAGER:
+    if MANAGER and MANAGER.status()["running"]:
         MANAGER.command("save-all flush")
         time.sleep(2)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -505,6 +505,12 @@ class Handler(BaseHTTPRequestHandler):
         print(f"[panel] {self.address_string()} {fmt % args}", flush=True)
 
     def do_GET(self) -> None:
+        try:
+            self._route_get()
+        except (ValueError, OSError) as exc:
+            json_response(self, {"error": str(exc)}, 400)
+
+    def _route_get(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path in STATIC_FILES:
             name, content_type = STATIC_FILES[parsed.path]
